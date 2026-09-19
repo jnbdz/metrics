@@ -1,0 +1,48 @@
+# Publish this fork's docker image so consumers can skip rebuilding it.
+#
+# The metrics action only pulls a prebuilt image when it runs from lowlighter/metrics;
+# a fork always falls through to `docker build`, which costs ~9 minutes per job and
+# intermittently hangs on apt's systemd triggers. Consumers pull this image and tag it
+# `metrics:forked-<version>` so the action finds it locally and skips the build.
+name: Publish fork image
+
+on:
+  push:
+    branches: [fix/plugins-2026]
+  workflow_dispatch:
+
+concurrency:
+  group: publish-fork-image
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    name: Build and publish to GitHub registry
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Resolve image tag from package.json
+        id: version
+        run: |
+          VERSION=$(grep -Po '(?<="version": ").*(?=")' package.json)
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Publishing forked-$VERSION"
+
+      - name: Login to GitHub registry
+        run: echo "${{ github.token }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      - name: Build docker image
+        run: docker build -t ghcr.io/${{ github.repository_owner }}/metrics:forked-${{ steps.version.outputs.version }} .
+
+      - name: Publish to GitHub registry
+        run: |
+          IMAGE=ghcr.io/${{ github.repository_owner }}/metrics:forked-${{ steps.version.outputs.version }}
+          docker push "$IMAGE"
+          docker tag "$IMAGE" ghcr.io/${{ github.repository_owner }}/metrics:fix-plugins-2026
+          docker push ghcr.io/${{ github.repository_owner }}/metrics:fix-plugins-2026
